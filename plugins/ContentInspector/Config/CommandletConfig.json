@@ -1,0 +1,94 @@
+{
+	"categories": [
+		{
+			"topPath": "Audio",
+			"depth": 5,
+			"blackList": []
+		},
+		{
+			"topPath": "BaseMaterials",
+			"depth": 5,
+			"blackList": []
+		},
+		{
+			"topPath": "Characters",
+			"depth": 5,
+			"blackList": []
+		},
+		{
+			"topPath": "Cinematics",
+			"depth": 5,
+			"blackList": []
+		},
+		{
+			"topPath": "Developers",
+			"depth": 5,
+			"blackList": []
+		},
+		{
+			"topPath": "Environment",
+			"depth": 5,
+			"blackList": []
+		},
+		{
+			"topPath": "FX",
+			"depth": 5,
+			"blackList": []
+		},
+		{
+			"topPath": "Gameplay",
+			"depth": 5,
+			"blackList": []
+		},
+		{
+			"topPath": "L10N",
+			"depth": 5,
+			"blackList": []
+		},
+		{
+			"topPath": "Localization",
+			"depth": 5,
+			"blackList": []
+		},
+		{
+			"topPath": "Meta",
+			"depth": 5,
+			"blackList": []
+		},
+		{
+			"topPath": "Movies",
+			"depth": 5,
+			"blackList": []
+		},
+		{
+			"topPath": "Objects",
+			"depth": 5,
+			"blackList": []
+		},
+		{
+			"topPath": "Scripts",
+			"depth": 5,
+			"blackList": []
+		},
+		{
+			"topPath": "Splash",
+			"depth": 5,
+			"blackList": []
+		},
+		{
+			"topPath": "STT",
+			"depth": 5,
+			"blackList": []
+		},
+		{
+			"topPath": "Tech",
+			"depth": 5,
+			"blackList": []
+		},
+		{
+			"topPath": "UI",
+			"depth": 5,
+			"blackList": []
+		}
+	]
+}

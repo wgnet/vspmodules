@@ -1,0 +1,139 @@
+﻿
+#pragma once
+#include "/Engine/Private/Common.ush"
+#include "/Engine/Public/Platform.ush"
+
+RWTexture2D<float4> BufferRW;
+Texture2D BrushStampTexture;
+Texture2D TerrainHeightCache;
+SamplerState BrushStampTextureSampler;
+SamplerState TerrainHeightCacheSampler;
+float3 BrushPosition;
+float3 BrushExtent;
+float3 BrushScale;
+float BrushAngle;
+float3 TerrainOrigin;
+float3 TerrainExtent;
+float3 TerrainScale;
+uint BlendMode;
+
+#define MAX_HEIGHT		int(65536)
+
+float UnpackRG8Height( in float2 RG )
+{
+	return ((RG.r * 255 * 256) + (RG.g * 255)) - 32768;
+}
+
+float2 PackRG8Height( float Value )
+{
+	float Remap = clamp(Value, -32768, 32767) + 32768;
+	return float2((float)(((int)Remap - ((int)Remap & 255)) >> 8) / 255.0, (float)((int)Remap & 255) / 255.0);
+}
+
+float2 GetCorrectionOffset(in float2 TextureSize)
+{
+	return ((TextureSize * TerrainScale.xy) - (TerrainExtent.xy * 2)) * 0.5f;
+}
+
+float2 RotateUVs( in float2 Coord, in float2 Pivot, in float Angle)
+{
+	// Rotation Matrix
+	float cosAngle = cos(Angle);
+	float sinAngle = sin(Angle);
+	float2x2 rot = float2x2(cosAngle, -sinAngle, sinAngle, cosAngle);
+ 
+	// Rotation considering pivot
+	float2 uv = Coord - Pivot;
+	uv = mul(rot, uv);
+	uv += Pivot;
+ 
+	return uv;
+}
+
+float RemapValueRange( float Value, float FromLow, float FromHigh, float TargetLow, float TargetHigh)
+{
+	return (Value - FromLow) / (FromLow - FromHigh) * (TargetHigh - TargetLow) + TargetLow;
+}
+
+float SphereMask(in float2 UVs, in float2 Center, in float Radius, in float Hardness)
+{
+	return 1 - saturate((distance(UVs, Center) - Radius) / (1 - Hardness));
+}
+
+float CalcCroppingMask(in float2 Coords)
+{
+	const float SpX = SphereMask(Coords.x, float2(0.5f, 0.5f), 0.5f, 0.75);
+	const float SpY = SphereMask(Coords.y, float2(0.5f, 0.5f), 0.5f, 0.75);
+	return saturate(SpX * SpY);
+}
+
+float BlendOverlay(float A, float B, float H = 0.5)
+{
+	return A < H ? 2.0 * A * B : 1.0 - 2.0 * (1.0 - A) * (1.0 - B);
+}
+
+[numthreads(THREADGROUPSIZE_X, THREADGROUPSIZE_Y, THREADGROUPSIZE_Z)]
+void MainCS( uint3 ThreadId : SV_DispatchThreadID )
+{
+	int2 TextureSize;
+	TerrainHeightCache.GetDimensions(TextureSize.x, TextureSize.y);
+	const float2 Resolution = float2(TextureSize.x, TextureSize.y);
+	const float2 TexelSize = 1 / Resolution;
+	const float2 UV = TexelSize * (ThreadId.xy + 0.5f);
+	
+	// Calc texture offsets
+	const float2 Offset = GetCorrectionOffset(Resolution);
+	const float3 UpperLeftCorner = float3(BrushPosition.xy - BrushExtent.xy - Offset, BrushPosition.z) / (TerrainExtent * 2);
+	const float3 LowerRightCorner = float3(BrushPosition.xy + BrushExtent.xy - Offset, BrushPosition.z) / (TerrainExtent * 2);
+
+	// Calc Brush Rotation UVs
+	const float2 RotCenter = (BrushPosition.xy - Offset ) / (TerrainExtent.xy * 2);
+	const float2 RotUVs = RotateUVs(UV - 0.5f, RotCenter, -BrushAngle);
+	// Texture Cropping
+	const float2 CropUVs = (-UpperLeftCorner.xy + RotUVs) / (LowerRightCorner.xy - UpperLeftCorner.xy);
+	const float CroppingMask = CalcCroppingMask(CropUVs);
+
+	const float BrushSample = BrushStampTexture.SampleLevel(BrushStampTextureSampler, CropUVs, 0).r * CroppingMask;
+	const float TerrainSample = UnpackRG8Height( TerrainHeightCache.SampleLevel(TerrainHeightCacheSampler, UV, 0).rg );
+
+	float BlendSamples = 0;
+
+	// Alpha // Composite
+	if (BlendMode == 0)
+	{
+		BlendSamples = TerrainSample + BrushPosition.z * 2 * BrushSample;
+	}
+	// Min
+	if (BlendMode == 1)
+	{
+		BlendSamples = min(TerrainSample, BrushPosition.z * 2);
+	}
+	// Max
+	if (BlendMode == 2)
+	{
+		BlendSamples = max(TerrainSample, BrushPosition.z * 2);
+	}
+	// Add
+	if (BlendMode == 3)
+	{
+		BlendSamples = TerrainSample +  BrushPosition.z * 2;
+	}
+	// Overlay
+	if (BlendMode == 4)
+	{
+		const float HalfHeight = MAX_HEIGHT / 2.f;
+		const float MaxHeight = MAX_HEIGHT;
+		const float BrushZ = BrushPosition.z*2 / MaxHeight;
+		const float Overlay = BlendOverlay((TerrainSample + HalfHeight) / MaxHeight, BrushSample + BrushZ);
+		BlendSamples = Overlay * MaxHeight - HalfHeight;
+		BlendSamples = lerp(TerrainSample, BlendSamples, BrushSample * BrushZ);
+		
+		float2 OutHeight = PackRG8Height(BlendSamples);
+		BufferRW[ThreadId.xy] = float4(OutHeight.r, OutHeight.g, 0, 1);
+		return;
+	}
+
+	const float BlendResult = lerp(TerrainSample, BlendSamples, saturate(BrushSample));
+	float2 OutHeight = PackRG8Height(BlendResult);
+	BufferRW[ThreadId.xy] = float4(OutHeight.r, OutHeight.g, 0, 1);
+}

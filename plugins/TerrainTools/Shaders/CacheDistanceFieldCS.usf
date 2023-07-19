@@ -1,0 +1,120 @@
+﻿
+#pragma once
+#include "/Engine/Private/Common.ush"
+#include "/Engine/Public/Platform.ush"
+
+RWTexture2D<float4> BufferRW;
+Texture2D JumpFloodTex;
+Texture2D DepthShapeTex;
+SamplerState JumpFloodSampler;
+SamplerState DepthShapeSampler;
+uint BlurOffset = 1;
+float BlurScale = 1;
+float2 TerrainRes;
+float2 WorldSize;
+float2 UVOffset;
+float TerrainZLocation;
+float TerrainZScale;
+float BrushPosition;
+float ZOffset;
+uint FalloffWidth;
+uint bInvert = 0;
+uint bUseBlur = 0;
+uint4 RenderRegion;
+
+float2 PointSampleTerrainUVs( float2 InUV, float2 InTerrainRes)
+{
+	return (floor(InUV * InTerrainRes) + 0.5f) / InTerrainRes;
+}
+
+float2 LocalizeTerrainZValue( float InWorldZ )
+{
+	return float2(( InWorldZ - TerrainZLocation ) / TerrainZScale, InWorldZ / TerrainZScale);
+}
+
+float2 SampleDistanceField( in float2 TexelSize, in float2 InUV, in uint2 ThreadId )
+{
+	//const float2 UVs = clamp(InUV, 0.5 * TexelSize, 1.0 - (0.5 * TexelSize));
+	const float4 DFSample = JumpFloodTex[ThreadId.xy];
+	const float InvertZ = ( -(DFSample.a - 0.5f) * 2) * ( bInvert ? 1 : -1 );
+	const float OutUVDistance = length(InUV - DFSample.xy) * InvertZ;
+	const float OutHeight = DFSample.b;
+	return float2(OutUVDistance, OutHeight);
+}
+
+float2 BlurDistanceField( in float2 Texel, in float2 UV, in int BlurSamples, in float Scale, uint bInvert )
+{
+	const float2 TexelSize = Texel * Scale;
+	float AccumulateUVs = 0;
+	float AccumulateHeight = 0;
+	int Samples = 0;
+	[loop]
+	for (int i = -BlurSamples; i <= BlurSamples; i++)
+	{
+		for (int j = -BlurSamples; j <= BlurSamples; j++)
+		{
+			float2 OffsetUVs = UV + (float2(i, j) * TexelSize);
+			OffsetUVs = clamp(OffsetUVs, 0.5 * TexelSize, 1.0 - (0.5 * TexelSize));
+
+			float4 OffsetSample = JumpFloodTex.SampleLevel(JumpFloodSampler, OffsetUVs, 0);
+			
+			const float InvDF = bInvert ? (-1) : (1);
+			const float RemapSample = ((OffsetSample.a - 0.5f) * 2);
+			const float DFSign = RemapSample * InvDF;
+			const float Dist = length(OffsetUVs - OffsetSample.xy) * DFSign;
+			
+			AccumulateUVs += Dist;
+			AccumulateHeight += OffsetSample.z;
+			Samples++;
+		}
+	}
+	
+	const float UVDistance = AccumulateUVs / max(1, Samples);
+	const float Height = AccumulateHeight / max(1, Samples);
+		
+	return float2(UVDistance, Height);
+}
+
+float CalcBorder( in float Dist, in float Alpha, in float2 Texel )
+{
+	const float NegShapeMask = (1 - saturate(Alpha)) * Dist;
+	const float BorderDist = max(Texel.x, Texel.y) / (TerrainZScale * 128) * FalloffWidth;
+	return saturate(ceil(NegShapeMask - BorderDist));
+}
+
+[numthreads(THREADGROUPSIZE_X, THREADGROUPSIZE_Y, THREADGROUPSIZE_Z)]
+void MainCS( uint3 ThreadId : SV_DispatchThreadID )
+{
+	int2 TextureSize;
+	JumpFloodTex.GetDimensions( TextureSize.x, TextureSize.y );
+	uint2 ThID = ThreadId.xy + RenderRegion.xy;
+	const float2 Resolution = float2(TextureSize.x, TextureSize.y);
+	const float2 TexelSize = 1 / Resolution;
+	const float2 UV = TexelSize * (ThID + 0.5f);
+	const float2 SampleUVs = PointSampleTerrainUVs(UV, Resolution) + UVOffset;
+	const float Mask = JumpFloodTex[ThID].a;
+	const float Depth = DepthShapeTex[ThID].r;
+	const float Border = CalcBorder(distance(JumpFloodTex[ThID].xy, UV), Mask, TexelSize);
+/*	TODO Optimize It
+	if ( (Border != 0) && (FalloffWidth > 0) )
+	{
+		BufferRW[ThID] = float4(0, 0, Border, Mask);
+		return;
+	}
+*/
+	float2 UVDistHeight = 0;
+	if ( bUseBlur )
+		UVDistHeight = BlurDistanceField(TexelSize, SampleUVs, BlurOffset, BlurScale, bInvert);
+	else
+		UVDistHeight = SampleDistanceField(TexelSize,SampleUVs, ThID);
+	
+	const float UVDist = floor(UVDistHeight.r * max(WorldSize.x, WorldSize.y));
+	// Blend Actual Depth inside Shape
+	const float PosHeight = UVDistHeight.g - BrushPosition;
+	const float NegHeight = Depth;
+	
+	float ActualShapeDepth = lerp(PosHeight, NegHeight, Mask) + ZOffset + TerrainZLocation;
+	ActualShapeDepth = floor(LocalizeTerrainZValue(ActualShapeDepth)).r;
+	
+	BufferRW[ThID] = float4(UVDist, ActualShapeDepth, Border, Mask);
+}

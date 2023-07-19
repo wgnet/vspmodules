@@ -1,0 +1,57 @@
+﻿
+#pragma once
+#include "/Engine/Private/Common.ush"
+#include "/Engine/Public/Platform.ush"
+
+RWTexture2D<float4> BufferRW;
+Texture2D Tex;
+int4 RenderRegion;
+static const int2 kOffsets[8] =
+{
+	int2(1, 0),
+	int2(-1, 0),
+	int2(0, 1),
+	int2(0, -1),
+	int2(1, 1),
+	int2(1, -1),
+	int2(-1, 1),
+	int2(-1, -1)
+};
+
+float4 BlurEdges(in uint2 ThreadId)
+{
+	float4 StartSample = Tex[ThreadId.xy];
+	uint Neighbors = 0;
+	float2 Accum = 0;
+
+	if ((StartSample.r + StartSample.g) == 0)
+	{
+		return StartSample;
+	}
+	[loop]
+	for ( uint k = 0; k < 8; k++ )
+	{
+		const float2 OffsetSample = Tex[ThreadId.xy + kOffsets[k]].rg;
+		
+		if ((OffsetSample.r + OffsetSample.g) > 0)
+		{
+			Accum.rg += OffsetSample.rg;
+			Neighbors++;
+		}
+	}
+
+	if (Neighbors > 0)
+	{
+		Accum.rg /= Neighbors;
+	}
+
+	return float4(Accum.rg, StartSample.ba);
+}
+
+[numthreads(THREADGROUPSIZE_X, THREADGROUPSIZE_Y, THREADGROUPSIZE_Z)]
+void MainCS( uint3 ThreadId : SV_DispatchThreadID )
+{
+	const uint2 ThID = ThreadId.xy + RenderRegion.xy;
+	const float4 Output = BlurEdges(ThID);
+	BufferRW[ThID] = Output;
+}

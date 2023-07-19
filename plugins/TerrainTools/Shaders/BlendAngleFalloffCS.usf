@@ -1,0 +1,180 @@
+﻿
+#pragma once
+#include "/Engine/Private/Common.ush"
+#include "/Engine/Public/Platform.ush"
+
+RWTexture2D<float4> BufferRW;
+Texture2D DistanceFieldCache;
+Texture2D TerrainHeightCache;
+SamplerState DistanceFieldCacheSampler;
+SamplerState TerrainHeightCacheSampler;
+// Params
+float2 UVOffset;
+float2 WorldSize;
+float2 TerrainRes;
+float TerrainZScale;
+// Angle Controls
+float FalloffTangent;
+uint FalloffWidth;
+float EdgeCenterOffset;
+// Smoothing
+float InnerSmoothThreshold;
+float OuterSmoothThreshold;
+// Terracing
+float TerracingAlpha;
+float TerracingSmoothness;
+float TerracingSpacing;
+float TerracingMask;
+float TerracingOffset;
+// Optional
+uint CapShapeInterior;
+uint BlendMode;
+
+
+float2 PointSampleTerrainUVs( float2 InUV, float2 InTerrainRes)
+{
+	return (floor(InUV * InTerrainRes) + 0.5f) / InTerrainRes;
+}
+
+void ReadCachedDistanceField( in float2 UV, out float WorldDist, out float Height, out float Border, out float Mask )
+{
+	const float2 SampleUVs = PointSampleTerrainUVs(UV, TerrainRes);
+	const float4 DistanceFieldSample = DistanceFieldCache.SampleLevel(DistanceFieldCacheSampler, SampleUVs, 0);
+	WorldDist = DistanceFieldSample.r;
+	Height = floor(DistanceFieldSample.g) + 1;// - DistanceFieldSample.b + 1;
+	Border = DistanceFieldSample.b;
+	Mask = DistanceFieldSample.a;
+}
+
+float2 SmoothIntersections( in float A, in float B, in float K )
+{
+	const float Alpha = saturate(((A - B) / K * 0.5f) + 0.5f);
+	const float Offset = ( Alpha * ( 1 - Alpha ) ) * K;
+	const float SmoothMax = lerp(B, A, Alpha) + Offset;
+	const float SmoothMin = lerp(A, B, Alpha) - Offset;
+	return float2( SmoothMin, SmoothMax );
+}
+
+float SmoothIntersectionsMin( in float A, in float B, in float K )
+{
+	const float Alpha = saturate( ((A - B) / K) * 0.5f + 0.5f);
+	const float Offset = ( Alpha * ( 1 - Alpha ) ) * K;
+	return lerp(A, B, Alpha) - Offset;
+}
+
+float SmoothIntersectionsMax( in float A, in float B, in float K )
+{
+	const float Alpha = saturate(((A - B) / K * 0.5f) + 0.5f);
+	const float Offset = ( Alpha * ( 1 - Alpha ) ) * K;
+	return lerp(B, A, Alpha) + Offset;
+}
+
+float UnpackRG8Height( in float2 RG )
+{
+	return ((RG.r * 255 * 256) + (RG.g * 255)) - 32768;
+}
+
+float2 PackRG8Height( float Value )
+{
+	float Remap = clamp(Value, -32768, 32767) + 32768;
+	return float2((float)(((int)Remap - ((int)Remap & 255)) >> 8) / 255.0, (float)((int)Remap & 255) / 255.0);
+}
+
+float GetDisplacement()
+{
+	return 0;
+}
+
+float SmoothCeil(in float Value, in float RampWidth)
+{
+	return ceil(Value) + ((cos(max((frac(Value) - (1 - RampWidth)) / RampWidth, 0.5)) + 1) * 0.5);
+}
+
+float SmoothTerracing(in float Height, in float Interval, in float Smoothness)
+{
+	const float RemapSmoothness = 1 / max(Smoothness, 0.0001f);
+	
+	float CurLevel = Height / Interval;
+	float CurPhase = frac(CurLevel);
+	float HalfMask = saturate(ceil(CurPhase - 0.5));
+	CurLevel = floor(CurLevel) * Interval;
+
+	float SCurve = lerp(CurPhase, 1 - CurPhase, HalfMask) * 2;
+	SCurve = pow(SCurve, RemapSmoothness) / 2;
+	SCurve = lerp(SCurve, 1 - SCurve, HalfMask) * Interval;
+	return SCurve + CurLevel;
+}
+
+float Terracing( in float Height, in float DFMask, float Alpha, float Smoothness, float Spacing, float MaskLen, float TerraceOffset )
+{
+	return lerp(Height, SmoothTerracing(Height,Spacing, Smoothness), saturate(( DFMask + TerraceOffset ) / MaskLen * Alpha) );
+}
+
+[numthreads(THREADGROUPSIZE_X, THREADGROUPSIZE_Y, THREADGROUPSIZE_Z)]
+void MainCS( uint3 ThreadId : SV_DispatchThreadID )
+{
+	int2 TextureSize;
+	TerrainHeightCache.GetDimensions(TextureSize.x, TextureSize.y);
+	const float2 Resolution = float2(TextureSize.x, TextureSize.y);
+	const float2 TexelSize = 1 / Resolution;
+	const float2 UV = TexelSize * (ThreadId.xy + 0.5f);
+
+	// Distance Field Shape
+	float WorldDistance, DistanceFieldHeight, Border, Mask;
+	ReadCachedDistanceField(UV + UVOffset, WorldDistance, DistanceFieldHeight, Border, Mask);
+	// Unpack Terrain Height Cache
+	const float TerrainHeight = UnpackRG8Height(TerrainHeightCache.SampleLevel(TerrainHeightCacheSampler, UV, 0).rg);
+
+	if ( (Border != 0) && (FalloffWidth > 0) )
+	{
+		BufferRW[ThreadId.xy] = TerrainHeightCache[ThreadId.xy];
+		return;
+	}
+	
+	// Angle Controls
+	const float Tangent = FalloffTangent / TerrainZScale;
+	const float CenterOffset = EdgeCenterOffset / TerrainZScale;
+	const float Angle = (Tangent * WorldDistance) + CenterOffset;
+	const float SmoothAngle = SmoothIntersectionsMin( Angle, 0, InnerSmoothThreshold );
+	// Flatten the Top
+	const float NewAngle = lerp(Angle, SmoothAngle, CapShapeInterior);
+	
+	const float NegativeShape = (-NewAngle + DistanceFieldHeight + GetDisplacement());
+	const float PositiveShape = ( NewAngle + DistanceFieldHeight + GetDisplacement());
+	const float IntersectionHeight = GetDisplacement() + DistanceFieldHeight - TerrainHeight;
+
+	float BlendResult = 0;
+	if ( BlendMode == 0 ) // Alpha Blend
+	{
+		// Alpha Blend Combined MinMax
+		const float AlphaMin = SmoothIntersectionsMin(TerrainHeight, NegativeShape, OuterSmoothThreshold);
+		// Prevent Smoothing poking into flat areas.
+		const float PrevSmoothing = min(OuterSmoothThreshold, max(IntersectionHeight, 0));
+		BlendResult = SmoothIntersectionsMax(AlphaMin, PositiveShape, PrevSmoothing);
+	}
+	if ( BlendMode == 1 ) // Min
+	{
+		BlendResult = SmoothIntersectionsMin(TerrainHeight, NegativeShape, OuterSmoothThreshold);
+	}
+	if ( BlendMode == 2 ) // Max
+	{
+		BlendResult = SmoothIntersectionsMax(TerrainHeight, PositiveShape, OuterSmoothThreshold);
+	}
+	if ( BlendMode == 3 ) // Add
+	{
+		const float AlphaMin = SmoothIntersectionsMin(0, NegativeShape, OuterSmoothThreshold);
+		// Prevent Smoothing poking into flat areas.
+		const float PrevSmoothing = min(OuterSmoothThreshold, max(GetDisplacement() + DistanceFieldHeight, 0));
+		BlendResult = SmoothIntersectionsMax(AlphaMin, PositiveShape, PrevSmoothing) + TerrainHeight;
+	}
+	if ( BlendMode == 4 ) // Debug
+	{
+		BlendResult = TerrainHeight;
+	}
+	
+	const float TerracingResult = Terracing(BlendResult, WorldDistance, TerracingAlpha, TerracingSmoothness, TerracingSpacing, TerracingMask, TerracingOffset);
+
+	const float2 Result = PackRG8Height(TerracingResult);
+	
+	BufferRW[ThreadId.xy] = float4(Result.r, Result.g, 0, 1);
+}

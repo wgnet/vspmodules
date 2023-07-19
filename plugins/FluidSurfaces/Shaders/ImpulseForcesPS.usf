@@ -1,0 +1,13 @@
+
+#include "/Engine/Public/Platform.ush"
+
+Texture2D Splash;
+SamplerState SplashSampler;
+
+void MainPS(in float2 UV : TEXCOORD0, out float4 OutColor : SV_Target0)
+{
+	const float SplashMask = Splash.SampleLevel(SplashSampler, UV, 0).r;
+	const float RadialGradient = 1 - saturate(distance(UV, float2(0.5f, 0.5f)) / 0.5f);
+	float SineBlob = sin(SplashMask * RadialGradient * 8);
+	OutColor = float4(SineBlob,0,0,0);
+}

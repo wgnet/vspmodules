@@ -1,0 +1,55 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.4.5",
+	"FriendlyName": "VSPPerfCollector",
+	"Description": "",
+	"Category": "Other",
+	"CreatedBy": "",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"EnabledByDefault": true,
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"Installed": true,
+	"SupportedPrograms": [
+		"UnrealInsights"
+	],
+	"Modules": [
+		{
+			"Name": "VSPPerfCollector",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"WhitelistPrograms": [
+				"UnrealInsights"
+			],
+			"BlacklistTargetConfigurations": [
+				"Shipping"
+			],
+			"WhitelistPlatforms": [
+				"Win64",
+				"Linux"
+			]
+		},
+        {
+            "Name": "VSPPerfViewer",
+            "Type": "ClientOnlyNoCommandlet",
+            "LoadingPhase": "Default",
+            "BlacklistTargetConfigurations": [
+                "Shipping"
+            ],
+            "BlacklistTargets": [
+                "Server"
+            ],
+            "WhitelistPlatforms": [
+                "Win64",
+                "Linux"
+            ],
+            "BlacklistPrograms": [
+                "UnrealInsights"
+            ]
+        }
+	]
+}

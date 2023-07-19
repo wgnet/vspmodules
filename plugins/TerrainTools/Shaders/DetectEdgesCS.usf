@@ -1,0 +1,63 @@
+﻿
+#pragma once
+#include "/Engine/Private/Common.ush"
+#include "/Engine/Public/Platform.ush"
+
+RWTexture2D<float4> BufferRW;
+Texture2D SeedEdges;
+float BrushPosition;
+
+static const int2 kOffsets[8] = {int2(1,0),int2(-1,0),int2(0,1),int2(0,-1),int2(1,1),int2(1,-1),int2(-1,1),int2(-1,-1)};
+
+float3 DetectEdges( in uint2 ThreadId, in float2 UV, in float2 TexelSize)
+{
+	const float StartSample = SeedEdges[ThreadId].r;
+	const float StartCheck = SeedEdges[ThreadId].g;
+	uint Neighbors = 0;
+	float3 Accum = 0;
+	[loop]
+	for (int k = 0; k < 8; k++)
+	{
+		const float OffsetSample = SeedEdges[ThreadId + kOffsets[k]].r;
+		const float OffsetCheck = SeedEdges[ThreadId + kOffsets[k]].g;
+
+		if (OffsetCheck != StartCheck && StartCheck <= 1)
+		{
+			Accum.xy += kOffsets[k] * TexelSize * 0.5;
+			
+			if (OffsetCheck == 1)
+			{
+				Accum.z += OffsetSample;
+			}
+			Neighbors++;
+		}
+	}
+
+	if (Neighbors > 0)
+	{
+		Accum.xyz /= Neighbors;
+		Accum.xy += UV;
+	}
+
+	if (StartCheck == 1)
+	{
+		Accum.b = StartSample.r;
+	}
+
+	return Accum;
+}
+
+[numthreads(THREADGROUPSIZE_X, THREADGROUPSIZE_Y, THREADGROUPSIZE_Z)]
+void MainCS( uint3 ThreadId : SV_DispatchThreadID )
+{
+	int2 TextureSize;
+	SeedEdges.GetDimensions(TextureSize.x, TextureSize.y);
+	const float2 Resolution = float2(TextureSize.x, TextureSize.y);
+	const float2 TexelSize = 1 / Resolution;
+	const float2 UV = TexelSize * (ThreadId.xy + 0.5f);
+
+	float3 Flood = DetectEdges(ThreadId.xy, UV, TexelSize);
+	const float Mask = saturate(ceil(SeedEdges[ThreadId.xy].g));
+
+	BufferRW[ThreadId.xy] = float4(Flood.rg, Flood.b + BrushPosition, Mask);
+}

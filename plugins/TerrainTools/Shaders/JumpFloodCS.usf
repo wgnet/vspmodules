@@ -1,0 +1,81 @@
+﻿
+#pragma once
+#include "/Engine/Private/Common.ush"
+#include "/Engine/Public/Platform.ush"
+
+RWTexture2D<float4> BufferRW;
+Texture2D SeedEdges;
+uint Index = -1;
+uint ClipShape;
+int4 RenderRegion;
+
+static const int2 kOffsets[8] = {int2(1,0),int2(-1,0),int2(0,1),int2(0,-1),int2(1,1),int2(1,-1),int2(-1,1),int2(-1,-1)};
+#define MAX_HEIGHT uint(65536)
+
+float4 JumpStep( in uint2 ThreadId, in float2 UV, in float2 TexelSize, in float OffsetMult)
+{
+	float3 CurrentSample = SeedEdges[ThreadId.xy].xyz;
+	const float Alpha = SeedEdges[ThreadId.xy].a;
+	float CurrentLenght = length(CurrentSample.xy - UV);
+	float MinLenght = CurrentLenght;
+	
+	if (CurrentSample.x == 0 && CurrentSample.y == 0)
+	{
+		MinLenght = MAX_HEIGHT;
+	}
+	
+	float3 NearestSample = CurrentSample.rgb;
+	[loop]
+	for (int i = 0; i < 8; i++)
+	{
+		float2 OffsetUV = UV + kOffsets[i] * OffsetMult * TexelSize;
+		CurrentSample = SeedEdges[ThreadId + kOffsets[i] * OffsetMult].rgb;
+
+		if ( ((CurrentSample.x > 0) || (CurrentSample.y > 0))
+			&& (OffsetUV.x > 0)
+			&& (OffsetUV.y > 0)
+			&& (OffsetUV.x < 1)
+			&& (OffsetUV.y < 1) )
+		{
+			CurrentLenght = length(CurrentSample.xy - UV);
+			if (CurrentLenght < MinLenght)
+			{
+				MinLenght = CurrentLenght;
+				NearestSample = CurrentSample.rgb;
+			}
+		}
+	}
+
+	return float4(NearestSample, Alpha);
+}
+
+[numthreads(THREADGROUPSIZE_X, THREADGROUPSIZE_Y, THREADGROUPSIZE_Z)]
+void MainCS( uint3 ThreadId : SV_DispatchThreadID )
+{
+	const uint2 ThID = ThreadId.xy + RenderRegion.xy;
+	int2 TextureSize;
+	SeedEdges.GetDimensions(TextureSize.x, TextureSize.y);
+	const float2 Resolution = float2(TextureSize.x, TextureSize.y);
+	const float2 TexelSize = 1 / Resolution;
+	const float2 UV = TexelSize * (ThID + 0.5f);
+
+#ifndef USE_CLIPSHAPE
+	const float OffsetMult = pow(2, ceil(log2(max(TextureSize.x, TextureSize.y))) - Index);
+	const float4 OutColor = JumpStep(ThID, UV, TexelSize, OffsetMult);
+	BufferRW[ThID] = OutColor;
+#endif
+	
+#ifdef USE_CLIPSHAPE
+	if ( (SeedEdges[ThreadId.xy].a != 0) || (SeedEdges[ThreadId.xy].r != 0) || (ClipShape == 0) )
+	{
+		//const float2 OffsetUV = (floor(UV * TextureSize) / TextureSize) + (TexelSize / 2.f);
+		const float OffsetMult = pow(2, ceil(log2(max(TextureSize.x, TextureSize.y))) - Index);
+		const float4 OutColor = JumpStep(ThID, UV, TexelSize, OffsetMult);
+		BufferRW[ThID] = OutColor;
+	}
+	else
+	{
+		BufferRW[ThID] = float4(SeedEdges[ThreadId.xy]);
+	}
+#endif
+}

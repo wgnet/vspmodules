@@ -1,0 +1,29 @@
+{
+    "GameThread": {
+        "FEngineLoop": {
+            "ConfluenceUrl": "",
+            "Budget": 37,
+            "Children": {
+                "STAT_FEngineLoop_UpdateTimeAndHandleMaxTickRate": {
+                    "ConfluenceUrl": "",
+                    "Budget": 0.02
+                },
+                "SlateTick": {
+                    "ConfluenceUrl": "",
+                    "Budget": 12,
+                    "SyntheticAccumulation": {
+                        "Increment": [
+                            "Slate::Tick (Time and Widgets)",
+                            "Slate::Tick (Platform and Input)"
+                        ]
+                    }
+                },
+                "Deferred Tick Time": {
+                    "Alias": "Deferred_Tick_Time",
+                    "ConfluenceUrl": "",
+                    "Budget": {}
+                }
+            }
+        }
+    }   
+}

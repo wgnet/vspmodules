@@ -1,0 +1,29 @@
+
+#include "/Engine/Public/Platform.ush"
+
+float4 Impulses[128];
+
+static const int2 kOffsets[4] =
+{
+	int2( 1,  1),
+	int2( 1, -1),
+	int2(-1,  1),
+	int2(-1, -1)
+};
+
+void MainVS(
+	in float4 InPosition	: ATTRIBUTE0,
+	in float2 InUV			: ATTRIBUTE1,
+	in uint InstanceID		: SV_InstanceID,
+	in uint VertexID		: SV_VertexID,
+	out float2 OutUV		: TEXCOORD0,
+	out float4 OutPosition	: SV_POSITION)
+{
+	const float Radius = max(Impulses[InstanceID].w, 0.01f);
+	const float3 ImpulsePosition = float4(Impulses[InstanceID].x * 2.0 - 1.0, 1.0 - 2.0 * Impulses[InstanceID].y, 0, 1);
+	const float3 VertexPosition = float3(kOffsets[clamp(VertexID, 0, 3)] * Radius, 0);
+	const float3 ParticlePosition = ImpulsePosition + VertexPosition;
+	
+	OutPosition = float4(ParticlePosition.x, ParticlePosition.y, 0, 1);
+	OutUV = InUV;
+}

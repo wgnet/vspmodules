@@ -1,0 +1,42 @@
+﻿
+#include "/Engine/Private/Common.ush"
+#include "/Engine/Public/Platform.ush"
+
+RWTexture2D<float4> NormalUAV;
+Texture2D BufferA;
+SamplerState BufferASampler;
+float SimulationWorldSize;
+
+void FluidNormalsCS( in uint3 ThreadId )
+{
+	int2 TextureSize;
+	NormalUAV.GetDimensions( TextureSize.x, TextureSize.y );
+	const float2 Resolution = float2(TextureSize.x, TextureSize.y);
+	const float2 TexelSize = 1 / Resolution;
+	const float2 UV = TexelSize * (ThreadId.xy + 0.5f);
+
+	const float2 NBC = BufferA.SampleLevel( BufferASampler, UV, 0 ).rg;
+	const float2 NBR = BufferA.SampleLevel( BufferASampler, UV + float2( TexelSize.x, 0 ), 0 ).rg;
+	const float2 NBL = BufferA.SampleLevel( BufferASampler, UV - float2( TexelSize.x, 0 ), 0 ).rg;
+	const float2 NBT = BufferA.SampleLevel( BufferASampler, UV + float2( 0, TexelSize.y ), 0 ).rg;
+	const float2 NBB = BufferA.SampleLevel( BufferASampler, UV - float2( 0, TexelSize.y ), 0 ).rg;
+
+	const float4 SurroundingHeights = float4( NBR.r, NBL.r, NBT.r, NBB.r );
+
+	const float2 CellSize = float2( SimulationWorldSize, SimulationWorldSize ) / TextureSize.xy;
+	const float2 HeightDeltas = ( SurroundingHeights.xz - SurroundingHeights.yw );
+	const float3 Tangent = float3( CellSize.x * 2.0f, 0, HeightDeltas.x );
+	const float3 Binormal = float3( 0, CellSize.y * 2.0f, HeightDeltas.y );
+	//float3 Cross = cross( Tangent, Binormal );
+	// Cross product taking advantage of the 0's in Tangent and Binormal
+	const float3 Cross = float3( -1, -1, 1 ) * Tangent.zxx * Binormal.yzy;
+	const float3 Normal = normalize(Cross);
+	const float Foam = NBC.g;//saturate(abs(NBC.r) + abs(NBC.g));
+	NormalUAV[ThreadId.xy] = float4(Normal.r, Normal.g, Normal.b, Foam);
+}
+
+[numthreads(THREADGROUPSIZE_X, THREADGROUPSIZE_Y, THREADGROUPSIZE_Z)]
+void MainCS( uint3 ThreadId : SV_DispatchThreadID )
+{
+	FluidNormalsCS(ThreadId);
+}

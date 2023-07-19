@@ -1,0 +1,31 @@
+
+#include "/Engine/Private/Common.ush"
+#include "/Engine/Public/Platform.ush"
+
+RWTexture2D<float4> OutputUAV;
+RWTexture2D<float4> InputUAVA;
+RWTexture2D<float4> InputUAVB;
+float Radius;
+float Hardness;
+
+float SphereMask( in float3 A, in float3 B, in float Radius, in float Hardness )
+{
+	return ( Radius - ( distance( A, B ) ) ) / ( 1 - Hardness );
+}
+
+float AlphaOffset( in float Alpha, in float Offset )
+{
+	return saturate( ( Alpha - Offset ) / ( 1 - Offset ) );
+}
+
+[numthreads(THREADGROUPSIZE_X, THREADGROUPSIZE_Y, THREADGROUPSIZE_Z)]
+void MainCS( uint3 ThreadId : SV_DispatchThreadID )
+{
+	int2 TextureSize;
+	OutputUAV.GetDimensions( TextureSize.x, TextureSize.y );
+	float2 Resolution = float2(TextureSize.x, TextureSize.y);
+	float2 UV = (ThreadId.xy / Resolution.xy);
+	float Result = SphereMask( float3(UV.x, UV.y, 0.5f), float3(0.5f, 0.5f, 0.5f), Radius, Hardness );
+	
+	OutputUAV[ThreadId.xy] = float4(Result, 0, 0, 1);
+}

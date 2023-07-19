@@ -1,0 +1,144 @@
+ Engine/Source/Developer/TraceAnalysis/TraceAnalysis.Build.cs         | 5 +++++
+ .../Source/Developer/TraceServices/Private/Model/TimingProfiler.cpp  | 1 +
+ Engine/Source/Developer/TraceServices/Private/ModuleService.cpp      | 5 +++++
+ .../Source/Developer/TraceServices/Public/Model/MonotonicTimeline.h  | 2 ++
+ .../TraceServices/Public/TraceServices/Containers/Timelines.h        | 4 ++++
+ .../TraceServices/Public/TraceServices/Model/TimingProfiler.h        | 2 ++
+ .../Developer/TraceServices/Public/TraceServices/ModuleService.h     | 1 +
+ Engine/Source/Developer/TraceServices/TraceServices.Build.cs         | 5 +++++
+ 8 files changed, 25 insertions(+)
+
+diff --git a/Engine/Source/Developer/TraceAnalysis/TraceAnalysis.Build.cs b/Engine/Source/Developer/TraceAnalysis/TraceAnalysis.Build.cs
+index ce69a5c9760..c2fc3cbc77c 100644
+--- a/Engine/Source/Developer/TraceAnalysis/TraceAnalysis.Build.cs
++++ b/Engine/Source/Developer/TraceAnalysis/TraceAnalysis.Build.cs
+@@ -6,6 +6,11 @@ public class TraceAnalysis : ModuleRules
+ {
+ 	public TraceAnalysis(ReadOnlyTargetRules Target) : base(Target)
+ 	{
++		if (Target.Configuration == UnrealTargetConfiguration.Shipping)
++			PrecompileForTargets = PrecompileTargetsType.None;
++		else
++			PrecompileForTargets = PrecompileTargetsType.Any;
++		
+ 		PrivateDependencyModuleNames.Add("Asio");
+ 		PrivateDependencyModuleNames.Add("Cbor");
+ 		PrivateDependencyModuleNames.Add("Core");
+diff --git a/Engine/Source/Developer/TraceServices/Private/Model/TimingProfiler.cpp b/Engine/Source/Developer/TraceServices/Private/Model/TimingProfiler.cpp
+index 7f971baad7b..5e088496aa4 100644
+--- a/Engine/Source/Developer/TraceServices/Private/Model/TimingProfiler.cpp
++++ b/Engine/Source/Developer/TraceServices/Private/Model/TimingProfiler.cpp
+@@ -144,6 +144,7 @@ FTimingProfilerProvider::TimelineInternal& FTimingProfilerProvider::EditCpuThrea
+ 		uint32 TimelineIndex = Timelines.Num();
+ 		CpuThreadTimelineIndexMap.Add(ThreadId, TimelineIndex);
+ 		Timelines.Add(Timeline);
++		OnTimelineAdded.Broadcast(ThreadId, TimelineIndex);
+ 		return Timeline.Get();
+ 	}
+ 	else
+diff --git a/Engine/Source/Developer/TraceServices/Private/ModuleService.cpp b/Engine/Source/Developer/TraceServices/Private/ModuleService.cpp
+index 9342b3127a8..211e0139eb3 100644
+--- a/Engine/Source/Developer/TraceServices/Private/ModuleService.cpp
++++ b/Engine/Source/Developer/TraceServices/Private/ModuleService.cpp
+@@ -83,6 +83,11 @@ void FModuleService::OnAnalysisBegin(IAnalysisSession& Session)
+ 		IModule* Module = KV.Value;
+ 		Module->OnAnalysisBegin(Session);
+ 	}
++	for (const auto& KV : ModulesMap)
++	{
++		IModule* Module = KV.Value;
++		Module->PostAnalysisBegin(Session);
++	}
+ }
+ 
+ TArray<const TCHAR*> FModuleService::GetModuleLoggers(const FName& ModuleName)
+diff --git a/Engine/Source/Developer/TraceServices/Public/Model/MonotonicTimeline.h b/Engine/Source/Developer/TraceServices/Public/Model/MonotonicTimeline.h
+index a1eb351149c..30f0cf77e56 100644
+--- a/Engine/Source/Developer/TraceServices/Public/Model/MonotonicTimeline.h
++++ b/Engine/Source/Developer/TraceServices/Public/Model/MonotonicTimeline.h
+@@ -59,6 +59,7 @@ public:
+ 	
+ 	void AppendBeginEvent(double StartTime, const EventType& Event)
+ 	{
++		ITimeline<InEventType>::OnEventStarted.ExecuteIfBound(StartTime, Event);
+ 		int32 CurrentDepth = DetailLevels[0].InsertionState.CurrentDepth;
+ 
+ 		AddScopeEntry(DetailLevels[0], StartTime, true);
+@@ -115,6 +116,7 @@ public:
+ 
+ 	void AppendEndEvent(double EndTime)
+ 	{
++		ITimeline<InEventType>::OnEventEnded.ExecuteIfBound(EndTime);
+ 		AddScopeEntry(DetailLevels[0], EndTime, false);
+ 
+ 		int32 CurrentDepth = DetailLevels[0].InsertionState.CurrentDepth;
+diff --git a/Engine/Source/Developer/TraceServices/Public/TraceServices/Containers/Timelines.h b/Engine/Source/Developer/TraceServices/Public/TraceServices/Containers/Timelines.h
+index eb0d3d29a31..7df848a5eaa 100644
+--- a/Engine/Source/Developer/TraceServices/Public/TraceServices/Containers/Timelines.h
++++ b/Engine/Source/Developer/TraceServices/Public/TraceServices/Containers/Timelines.h
+@@ -28,6 +28,8 @@ public:
+ 	typedef TFunctionRef<EEventEnumerate(double /*StartTime*/, double /*EndTime*/, uint32 /*Depth*/, const EventType&/*Event*/)> EventRangeCallback;
+ 	typedef TFunction<EEventEnumerate(double /*StartTime*/, double /*EndTime*/, uint32 /*Depth*/, const EventType&/*Event*/, uint32 TaskIndex)> AsyncEventRangeCallback;
+ 	typedef TFunction<void(uint32 /*NumTasks*/)> TaskInfoCallback;
++	DECLARE_DELEGATE_TwoParams( FOnEventStart, double, InEventType )
++	DECLARE_DELEGATE_OneParam( FOnEventEnd, double )
+ 
+ 	struct FTimelineEventInfo
+ 	{
+@@ -59,6 +61,8 @@ public:
+ 	virtual void EnumerateEvents(double IntervalStart, double IntervalEnd, EventCallback Callback) const = 0;
+ 	virtual void EnumerateEvents(double IntervalStart, double IntervalEnd, EventRangeCallback Callback) const = 0;
+ 	
++	mutable FOnEventStart OnEventStarted;
++	mutable FOnEventEnd OnEventEnded;
+ 	/**
+ 	 * Finds event information for the event closest to InTime from the interval [InTime - DeltaTime, InTime + DeltaTime]
+ 	 * @param InTime - The time used to query for the event 
+diff --git a/Engine/Source/Developer/TraceServices/Public/TraceServices/Model/TimingProfiler.h b/Engine/Source/Developer/TraceServices/Public/TraceServices/Model/TimingProfiler.h
+index 4d8dace546e..82bc6f998cd 100644
+--- a/Engine/Source/Developer/TraceServices/Public/TraceServices/Model/TimingProfiler.h
++++ b/Engine/Source/Developer/TraceServices/Public/TraceServices/Model/TimingProfiler.h
+@@ -71,6 +71,7 @@ class ITimingProfilerProvider
+ {
+ public:
+ 	typedef ITimeline<FTimingProfilerEvent> Timeline;
++	DECLARE_MULTICAST_DELEGATE_TwoParams( FOnTimelineAdded, uint32, uint32 )
+ 
+ 	virtual ~ITimingProfilerProvider() = default;
+ 	virtual bool GetCpuThreadTimelineIndex(uint32 ThreadId, uint32& OutTimelineIndex) const = 0;
+@@ -82,6 +83,7 @@ public:
+ 	virtual void ReadTimers(TFunctionRef<void(const ITimingProfilerTimerReader&)> Callback) const = 0;
+ 	virtual ITable<FTimingProfilerAggregatedStats>* CreateAggregation(double IntervalStart, double IntervalEnd, TFunctionRef<bool(uint32)> CpuThreadFilter, bool IncludeGpu) const = 0;
+ 	virtual ITimingProfilerButterfly* CreateButterfly(double IntervalStart, double IntervalEnd, TFunctionRef<bool(uint32)> CpuThreadFilter, bool IncludeGpu) const = 0;
++	mutable FOnTimelineAdded OnTimelineAdded;
+ };
+ 
+ TRACESERVICES_API const ITimingProfilerProvider* ReadTimingProfilerProvider(const IAnalysisSession& Session);
+diff --git a/Engine/Source/Developer/TraceServices/Public/TraceServices/ModuleService.h b/Engine/Source/Developer/TraceServices/Public/TraceServices/ModuleService.h
+index 82ac52f44b0..e6208ed5b7c 100644
+--- a/Engine/Source/Developer/TraceServices/Public/TraceServices/ModuleService.h
++++ b/Engine/Source/Developer/TraceServices/Public/TraceServices/ModuleService.h
+@@ -26,6 +26,7 @@ class IModule
+ public:
+ 	virtual void GetModuleInfo(FModuleInfo& OutModuleInfo) = 0;
+ 	virtual void OnAnalysisBegin(IAnalysisSession& Session) = 0;
++	virtual void PostAnalysisBegin(IAnalysisSession& Session) {}
+ 	virtual void GetLoggers(TArray<const TCHAR*>& OutLoggers) = 0;
+ 	virtual void GenerateReports(const IAnalysisSession& Session, const TCHAR* CmdLine, const TCHAR* OutputDirectory) = 0;
+ 	virtual const TCHAR* GetCommandLineArgument() = 0;
+diff --git a/Engine/Source/Developer/TraceServices/TraceServices.Build.cs b/Engine/Source/Developer/TraceServices/TraceServices.Build.cs
+index e58bc560dfc..ea21af1a72c 100644
+--- a/Engine/Source/Developer/TraceServices/TraceServices.Build.cs
++++ b/Engine/Source/Developer/TraceServices/TraceServices.Build.cs
+@@ -6,6 +6,11 @@ public class TraceServices : ModuleRules
+ {
+ 	public TraceServices(ReadOnlyTargetRules Target) : base(Target)
+ 	{
++		if (Target.Configuration == UnrealTargetConfiguration.Shipping)
++			PrecompileForTargets = PrecompileTargetsType.None;
++		else
++			PrecompileForTargets = PrecompileTargetsType.Any; // Make it available to build for test/developer
++		
+ 		PublicDependencyModuleNames.AddRange(
+ 			new string[] {
+ 				"Core",

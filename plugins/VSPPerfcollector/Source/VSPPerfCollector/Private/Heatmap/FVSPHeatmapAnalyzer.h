@@ -1,0 +1,54 @@
+﻿/*
+* Copyright 2023 Wargaming.net Limited
+*
+* Licensed under the Apache License, Version 2.0 (the "License");
+* you may not use this file except in compliance with the License.
+* You may obtain a copy of the License at
+*
+* https://www.apache.org/licenses/LICENSE-2.0
+*
+* Unless required by applicable law or agreed to in writing, software
+* distributed under the License is distributed on an "AS IS" BASIS,
+* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+* See the License for the specific language governing permissions and
+* limitations under the License.
+*/ 
+#pragma once
+#include "Trace/Analyzer.h"
+
+class FVSPHeatmapCollectorModule;
+
+namespace Trace
+{
+	class IAnalysisSession;
+}
+
+class FVSPHeatmapAnalyzer : public Trace::IAnalyzer
+{
+	enum : uint16
+	{
+		RouteId_HeatmapSettings,
+		RouteId_BeginSnapshot,
+		RouteId_StopSnapshot,
+		RouteId_MinimapInfo
+	};
+
+
+public:
+	FVSPHeatmapAnalyzer(Trace::IAnalysisSession& InSession, FVSPHeatmapCollectorModule& InHeatmapCollector);
+
+	void OnAnalysisBegin(const FOnAnalysisContext& Context) override;
+	bool OnEvent(uint16 RouteId, EStyle Style, const FOnEventContext& Context) override;
+
+
+protected:
+	void HandleHeatmapSettings(const FOnEventContext &Context) const;
+	void HandleBeginSnapshot(const FOnEventContext &Context) const;
+	void HandleStopSnapshot(const FOnEventContext &Context) const;
+	void HandleMinimapInfo(const FOnEventContext &Context) const;
+
+
+private:
+	Trace::IAnalysisSession& Session;
+	FVSPHeatmapCollectorModule& HeatmapCollector;
+};

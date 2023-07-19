@@ -1,0 +1,142 @@
+
+#include "/Engine/Private/Common.ush"
+#include "/Engine/Public/Platform.ush"
+
+RWTexture2D<float4> FlowUAV;
+
+Texture2D BufferA;
+Texture2D BufferB;
+Texture2D BufferF;
+Texture2D BufferI;
+
+SamplerState BufferASampler;
+SamplerState BufferBSampler;
+SamplerState BufferFSampler;
+SamplerState BufferISampler;
+
+float3 PreviousOffsets1;
+float3 PreviousOffsets2;
+
+float RippleFoamErasure = 0.1f;
+float FoamDamping = 0.998f;
+float FluidDamping = 0.01f;
+float TravelSpeed = 0.9f;
+float SimulationWorldSize = 2048.f;
+float ForceMultiplier = 10.f;
+float ImpulseMultiplier = 50.f;
+
+#define GridLocation float3(0,0,0)
+#define LandscapeLocation float3(0,0,0)
+#define WorldSize float3(0,0,0)
+#define EnableFoamForces false
+#define MaskThreshold float(0.5f)
+#define EdgeMaskOffset float(0.02f)
+#define MaskWidth float(0.1f)
+#define USE_FIXEDSTEP false
+#define USE_USEVELOCITY false
+// Padding = 6.f / Resolution
+#define RFO saturate( floor( ( abs( UV - 0.5f ) * 2.f ) + ( 6.f / Resolution ) ) )
+
+float2 FluidSimulationHooks( in float2 UVs )
+{
+#if USE_USEVELOCITY	
+	float2 Coord = UVs / 2.f * SimulationWorldSize;
+	Coord += GridLocation.xy - LandscapeLocation.xy;
+	Coord /= SimulationWorldSize;
+	float2 Velocity = FlowMap.SampleLevel( FlowMapSampler, Coord, 0 ).rg;
+	Velocity /= SimulationWorldSize;
+	Velocity *= FixedStep;
+	return Velocity;
+#else
+	return float2(0.f, 0.f);
+#endif
+}
+
+float SphereMask( in float3 A, in float3 B, in float Radius, in float Hardness )
+{
+	return ( Radius - ( distance( A, B ) ) ) / ( 1 - Hardness );
+}
+
+float AlphaOffset( in float Alpha, in float Offset )
+{
+	return saturate( ( Alpha - Offset ) / ( 1 - Offset ) );
+}
+
+float GetFoamSimulationForces()
+{
+	return 0.f;
+}
+
+float GetWaterDepth()
+{
+	return 0.f;
+}
+
+void FluidFlowCS( in uint3 ThreadId )
+{
+	int2 TextureSize;
+	FlowUAV.GetDimensions( TextureSize.x, TextureSize.y );
+	const float2 Resolution = float2(TextureSize.x, TextureSize.y);
+	const float2 TexelSize = 1 / Resolution;
+	const float2 UV = TexelSize * (ThreadId.xy + 0.5f);
+	
+	// Fluid Advection
+#if USE_USEVELOCITY
+	const float2 OffsetUV1 = UV - PreviousOffsets1.xy + ( FluidSimulationHooks(UV) * 1 );
+	const float2 OffsetUV2 = UV - PreviousOffsets2.xy + ( FluidSimulationHooks(UV) * 2 );
+#else
+	const float2 OffsetUV1 = UV - PreviousOffsets1.xy;
+	const float2 OffsetUV2 = UV - PreviousOffsets2.xy;
+#endif
+	
+	const float2 MidpointA = BufferA.SampleLevel( BufferASampler, OffsetUV1, 0 ).rg;
+	const float2 MidpointB = BufferB.SampleLevel( BufferBSampler, OffsetUV2, 0 ).rg;
+	
+	const float4 Impulse = saturate( BufferI.SampleLevel( BufferISampler, UV, 0 ) ) * ImpulseMultiplier;
+	const float4 Forces = saturate( BufferF.SampleLevel( BufferFSampler, UV, 0 ) ) * ForceMultiplier + Impulse;
+
+	const float2 NBR = BufferA.SampleLevel( BufferASampler, OffsetUV1 + float2( TexelSize.x, 0 ), 0 ).rg;
+	const float2 NBL = BufferA.SampleLevel( BufferASampler, OffsetUV1 - float2( TexelSize.x, 0 ), 0 ).rg;
+	const float2 NBT = BufferA.SampleLevel( BufferASampler, OffsetUV1 + float2( 0, TexelSize.y ), 0 ).rg;
+	const float2 NBB = BufferA.SampleLevel( BufferASampler, OffsetUV1 - float2( 0, TexelSize.y ), 0 ).rg;
+	
+	// Surrounding Heights
+	const float2 NeighborsHeight = float2(
+		dot( float4( NBR.x, NBL.x, NBT.x, NBB.x ), 1 ),
+		dot( abs( float4( NBR.y, NBL.y, NBT.y, NBB.y ) ), 1 ) );
+
+	const float4 SurroundingHeights = float4( MidpointA.x, MidpointA.y, NeighborsHeight.x, NeighborsHeight.y );
+
+	// Adjustment
+	const float MidpointHeight = SurroundingHeights.r * 4.f;
+	const float Curve = ( ( ( SurroundingHeights.b - MidpointHeight ) * TravelSpeed ) + MidpointHeight ) * 0.5f;
+
+	// Final Fluid Advection with Damping
+	float Advection = ( Curve - MidpointB.r ) * saturate( 1 - FluidDamping );
+
+	Advection += GetFoamSimulationForces();
+
+	// Foam Diffusion + Erosion
+	const float FoamDiffusion = ( abs( SurroundingHeights.g ) + SurroundingHeights.a ) / 5.f;
+	const float FoamErosion = max( -SurroundingHeights.r - 2, 0 ) * RippleFoamErasure;
+	const float FoamDiffusionErosion = saturate( FoamDiffusion + FoamErosion ) * FoamDamping;
+
+	// Reflecting
+	const float ReflectingOffWalls = 1 - max( RFO.x, RFO.y );
+	const float ShoreReflectsRipples = 1.f; //saturate( (  GetWaterDepth() - EdgeMaskOffset ) / MaskWidth );
+	
+	float2 Result = float2( Advection, FoamDiffusionErosion );
+	Result += float2( Forces.r, abs( Forces.g ) );
+	Result *= saturate( float2( ceil( Forces.a - MaskThreshold ), 1.f ) );
+	Result *= ReflectingOffWalls * ShoreReflectsRipples;
+
+	FlowUAV[ ThreadId.xy ] = float4( Result.r, Result.g, 0.f, 0.f );
+}
+
+
+[numthreads(THREADGROUPSIZE_X, THREADGROUPSIZE_Y, THREADGROUPSIZE_Z)]
+void MainCS( uint3 ThreadId : SV_DispatchThreadID )
+{
+	FluidFlowCS(ThreadId);
+	//FluidNormalsCS(ThreadId);
+}

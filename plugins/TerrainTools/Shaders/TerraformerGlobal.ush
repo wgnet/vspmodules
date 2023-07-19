@@ -1,0 +1,8 @@
+﻿
+#pragma once
+#include "/Engine/Private/Common.ush"
+#include "/Engine/Public/Platform.ush"
+
+#define MAX_HEIGHT		int(65536)
+#define TERRAIN_SCALE	int(100)
+#define GOLDEN_RATIO	float(1.6180339887498948482045868343656381f)

@@ -1,0 +1,107 @@
+
+#define NEWBRUSH
+
+struct FDetectEdges
+{
+	float3 DetectEdges( in Texture2D Tex, in SamplerState TexSampler, in float2 UV, in float2 TextureSize, in float SceneCaptureZ, in bool bUsesDepth )
+	{
+		const float2 TexelSize = 1 / TextureSize;
+		const float2 Offsets[8] = {float2(1,0),float2(-1,0),float2(0,1),float2(0,-1),float2(1,1),float2(1,-1),float2(-1,1),float2(-1,-1)};
+		float StartSample = Tex.SampleLevel(TexSampler, UV, 0);
+
+		if ( bUsesDepth )
+		{
+			StartSample = SceneCaptureZ - StartSample;
+		}
+#ifdef NEWBRUSH
+		const float StartCheck = Tex.SampleLevel(TexSampler, UV, 0).g;
+#else
+		const float StartCheck = saturate(ceil(StartSample));
+#endif
+		
+		int Neighbors = 0;
+		float3 Accum = 0;
+		
+		for ( int i = 0; i < 4; i++ )
+		{
+			float2 OffsetUV = UV + ( Offsets[i] * TexelSize );
+			// Only wrap edges of the current edge sample was shape interior, to make sure the edge gets seeded
+			if ( StartCheck == 0 )
+			{
+				OffsetUV = clamp(OffsetUV, 0.5 * TexelSize, 1 - (0.5 * TexelSize));
+			}
+
+			float OffsetSample = Tex.SampleLevel(TexSampler, OffsetUV, 0);
+			if ( bUsesDepth )
+			{
+				OffsetSample = SceneCaptureZ - OffsetSample;
+			}
+
+#ifdef NEWBRUSH
+			const float OffsetCheck = Tex.SampleLevel(TexSampler, OffsetUV, 0).g;
+#else
+			const float OffsetCheck = saturate( ceil(OffsetSample) );
+#endif
+
+			if ( OffsetCheck != StartCheck && StartCheck <= 1 )
+			{
+				Accum.xy += Offsets[i] * TexelSize * 0.5;
+
+				Neighbors++;
+
+				if ( OffsetCheck == 1 )
+				{
+					Accum.z += OffsetSample;
+				}
+			}
+		}
+
+		if ( Neighbors > 0 )
+		{
+			Accum.xyz /= Neighbors;
+			Accum.xy += UV;
+		}
+
+		if ( StartCheck == 1 )
+		{
+			Accum.b = StartSample;
+		}
+		
+		return Accum;
+	}
+};
+
+struct FDistanceFieldCache
+{
+	float2 BlurDistanceField( Texture2D Tex, SamplerState TexSampler, float2 Texel, float2 UV, float Bluroffset, float Scale, bool bInvert )
+	{
+		float Samples = 0;
+		const float2 TexelSize = Texel * Scale;
+		float AccumulateUV = 0;
+		float AccumulateHeight = 0;
+
+		for (int i = -Bluroffset; i <= Bluroffset; i++)
+		{
+			for (int j = -Bluroffset; j <= Bluroffset; j++)
+			{
+				float2 Offset = UV + (float2(i, j) * TexelSize);
+				Offset = clamp(0.5 * TexelSize, 1.0 - (0.5 * TexelSize), Offset);
+
+				float4 OffsetSample = Tex.SampleLevel(TexSampler, Offset, 0);
+
+				float Dist = length(Offset - OffsetSample.xy);
+				float DFSign = lerp(1.0, -1.0, OffsetSample.a) * lerp( 1, -1, bInvert );
+				Dist *= -DFSign;
+				
+				// Accumulate
+				AccumulateUV += Dist;
+				AccumulateHeight += OffsetSample.z;
+				Samples += 1.0;
+			}
+		}
+
+		AccumulateUV /= max(1.0, Samples);		// UV Distance
+		AccumulateHeight /= max(1.0, Samples);	// Z Height
+		return float2(AccumulateUV, AccumulateHeight);
+	}
+};

@@ -1,0 +1,35 @@
+{
+    "FileVersion": 3,
+    "Version": 1,
+    "VersionName": "1.0",
+    "FriendlyName": "Asset Register",
+    "Description": "",
+    "Category": "Other",
+    "CreatedBy": "",
+    "CreatedByURL": "",
+    "DocsURL": "",
+    "MarketplaceURL": "",
+    "SupportURL": "",
+    "CanContainContent": true,
+    "IsBetaVersion": true,
+    "IsExperimentalVersion": true,
+    "Installed": false,
+    "Modules": [
+        {
+            "Name": "AssetRegisterEditor",
+            "Type": "Editor",
+            "LoadingPhase": "Default"
+        },
+        {
+            "Name": "AssetRegisterRuntime",
+            "Type": "Runtime",
+            "LoadingPhase": "EarliestPossible"
+        }
+    ],
+    "Plugins": [
+        {
+            "Name": "AssetManagerEditor",
+            "Enabled": true
+        }
+    ]
+}
